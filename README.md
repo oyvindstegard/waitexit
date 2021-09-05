@@ -10,7 +10,16 @@ Copy binary to wherever you like.
     
 ## Usage
 
-    waitexit -h
+    $ ./waitexit -h
+    Prints a countdown in terminal while waiting to exit.
+    When timer reaches zero or any input occurs, the program exits.
+
+    Use: waitexit [opts] N, where N is number of seconds to wait.
+
+    Options:
+    -s       be completely silent, do not output anything while waiting.
+    -e CODE  exit with status CODE
+    -h       show this help
     
 ## Purpose
 
