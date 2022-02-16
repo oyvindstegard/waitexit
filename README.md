@@ -1,3 +1,4 @@
+
 # waitexit
 
 ## Build (on Linux-ish with gcc available)
@@ -11,15 +12,20 @@ Copy binary to wherever you like.
 ## Usage
 
     $ ./waitexit -h
-    Prints a countdown in terminal while waiting to exit.
-    When timer reaches zero or any input occurs, the program exits.
+    Prints a countdown in terminal while waiting to exit. When timer reaches zero or
+    any input occurs, the program exits.
 
     Use: waitexit [opts] N, where N is number of seconds to wait.
 
     Options:
-    -s       be completely silent, do not output anything while waiting.
-    -e CODE  exit with status CODE
-    -h       show this help
+    -m MSG  Use a custom countdown message template, where '%S' is replaced by 
+            number of seconds left.
+    -e CODE Exit with status CODE.
+    -f      Exit with status 0 if user presses a key within the timeout, otherwise 
+            exit with non-zero code.
+    -z      Suppress printing of wait time and status code on exit.
+    -s      Be completely silent, do not output anything while waiting or on exit.
+    -h      Show this help.
     
 ## Purpose
 
