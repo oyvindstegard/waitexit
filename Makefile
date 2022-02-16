@@ -6,7 +6,9 @@ CFLAGS = -O2 -Wall -Wno-unused-result
 waitexit: waitexit.c
 	$(CC) -o $@ $< $(CFLAGS)
 
-# Clean up
-.PHONY: clean
+tags:
+	etags *.[ch]
+
+.PHONY: clean tags
 clean:
 	rm -f waitexit
