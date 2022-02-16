@@ -14,7 +14,7 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 
-/* Get terminal width using ioctl */
+/* Get terminal width (columns) using ioctl. */
 static unsigned short term_width = 0;
 static unsigned short get_terminal_width() {
   if (term_width == 0) {
@@ -42,6 +42,7 @@ static void print_aligned(FILE* const out,
   size_t remain = strlen(text);
   char buf[1024 + remain];
   char* writeptr = buf;
+
   while (remain > 0) {
     while (isspace(*text)) ++text;
     int linemax = formatting_width - prefix_len;
@@ -56,23 +57,22 @@ static void print_aligned(FILE* const out,
       }
       writeptr = stpncpy(writeptr, text, linemax);
       remain -= linemax;
-      
       text += linemax;
       *(writeptr++) = '\n';
       for (int i=0; i<prefix_len; i++) *(writeptr++) = ' ';
     } else {
       // last line
       writeptr = stpncpy(writeptr, text, remain);
-      strcpy(writeptr, "\n");
       break;
     }
   }
+  strcpy(writeptr, "\n");
   fputs(buf, out);
 }
 
+/* Prints formatted program usage to stderr. */
 static void print_usage(const char* self) {
-  print_aligned(stderr, "", "Prints a countdown in terminal while waiting to exit.");
-  print_aligned(stderr, "", "When timer reaches zero or any input occurs, the program exits.");
+  print_aligned(stderr, "", "Prints a countdown in terminal while waiting to exit. When timer reaches zero or any input occurs, the program exits.");
   print_aligned(stderr, "", "");
 
   char* bnbuf = strdup(self);
@@ -83,25 +83,50 @@ static void print_usage(const char* self) {
 
   print_aligned(stderr, "", "");
   print_aligned(stderr, "Options:", "");
-  print_aligned(stderr, "-x      ", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
-  print_aligned(stderr, "-s      ", "Be completely silent, do not output anything while waiting. While testing this solution, there are necessary words lorem opsum dolor. Sit amet while waiting. For never ending. Great. 1 2 3 4 5. End of text.");
   
-  print_aligned(stderr, "-m MSG  ", "Use a custom countdown message, which is a format string with single integer argument that is number of seconds left.");
+  print_aligned(stderr, "-m MSG  ", "Use a custom countdown message template, where '%S' is replaced by number of seconds left.");
   print_aligned(stderr, "-e CODE ", "Exit with status CODE.");
-  print_aligned(stderr, "-h      ", "show this help.");
+  print_aligned(stderr, "-f      ", "Exit with status 0 if user presses a key within the timeout, otherwise exit with non-zero code.");
+  print_aligned(stderr, "-z      ", "Suppress printing of wait time and status code on exit.");
+  print_aligned(stderr, "-s      ", "Be completely silent, do not output anything while waiting or on exit.");
+  print_aligned(stderr, "-h      ", "Show this help.");
 }
 
-static const char* DEFAULT_MSG = "Hei there %s seconds left";
+#define DEFAULT_MSG_TEMPLATE         "Waiting for %S seconds, press any key to exit.."
+
+/* Prepares message from template, with number of seconds left. */
+static void prepare_message(char* dst, const char* template, const int seconds_left) {
+  const size_t template_len = strlen(template);
+  for (unsigned int i=0; i<template_len; i++) {
+    const char c = template[i];
+    switch (c) {
+    case '\n':
+    case '\r':
+      continue;
+    case '%':
+      if (i<template_len-1 && template[i+1] == 'S') {
+        dst += sprintf(dst, "%d", seconds_left);
+        ++i;
+        continue;
+      }
+    default:
+      *(dst++) = c;
+    }
+  }
+  *dst = 0;
+}
 
 typedef struct {
   int countdown;
   unsigned int opts;
   unsigned char exitcode;
-  char* msg;
+  char template[256];
 } Settings;
 
-#define OPT_SILENT 0x1
-#define OPT_HELP   0x2
+#define OPT_SILENT                    0x1
+#define OPT_HELP                      0x2
+#define OPT_SUPPRESS_EXIT_INFO        0x4
+#define OPT_FAIL_NO_USER_INTERACTION  0x8
 
 /* Parse arguments and populate settings object, returns != 0 on success. */
 static int parse_arguments(int argc, char** argv, Settings* settings) {
@@ -110,13 +135,29 @@ static int parse_arguments(int argc, char** argv, Settings* settings) {
   settings->opts = 0;
   settings->countdown = -1;
   settings->exitcode = 0;
+  strcpy(settings->template, DEFAULT_MSG_TEMPLATE);
 
   opterr = 1;
   
-  while ((c = getopt(argc, argv, "she:")) != -1) {
+  while ((c = getopt(argc, argv, "shzfe:m:")) != -1) {
     switch(c) {
     case 's':
       settings->opts |= OPT_SILENT;
+      break;
+    case 'z':
+      settings->opts |= OPT_SUPPRESS_EXIT_INFO;
+      break;
+    case 'f':
+      settings->opts |= OPT_FAIL_NO_USER_INTERACTION;
+      settings->exitcode = 0;
+      break;
+    case 'm':
+      if (strnlen(optarg, 256) >= 256) {
+        fprintf(stderr, "Error: message template too big, max size is 255 chars.");
+        return 0;
+      }
+      strncpy(settings->template, optarg, 255);
+      settings->template[255] = 0;
       break;
     case 'e':
       if (sscanf(optarg, "%i", &val) != 1) {
@@ -128,6 +169,7 @@ static int parse_arguments(int argc, char** argv, Settings* settings) {
         return 0;
       }
       settings->exitcode = val;
+      settings->opts &= ~OPT_FAIL_NO_USER_INTERACTION;
       break;
     case 'h':
       settings->opts |= OPT_HELP;
@@ -148,8 +190,9 @@ static int parse_arguments(int argc, char** argv, Settings* settings) {
   return 1;
 }
 
-/* Waits at most one second for a character to be read from stdin. */
-static int wait_key_pressed() {
+/* Waits at most one second for a character to be read from stdin. 
+   Returns 0 on timeout, or non zero on input while waiting. */
+static int wait_for_one_second_or_input() {
   fd_set read_stdin_fds;
   FD_ZERO(&read_stdin_fds);
   FD_SET(STDIN_FILENO, &read_stdin_fds);
@@ -211,27 +254,36 @@ int main(int argc, char ** argv) {
   init_termio();
 
   int seconds = settings.countdown;
+  int exitcode = settings.exitcode;
 
   int seconds_left = seconds;
   while (seconds_left > 0) {
     if (! (settings.opts & OPT_SILENT)) {
-      fprintf(stdout, "Waiting for %i seconds, press any key to exit..", seconds_left);
+      char msg[1024];
+      prepare_message(msg, settings.template, seconds_left);
+      fputs(msg, stdout);
     }
-    if (wait_key_pressed()) {
+    if (wait_for_one_second_or_input()) {
       break;
     }
     
     seconds_left = seconds_left - 1;
     
-
     if (! (settings.opts & OPT_SILENT)) {
       fprintf(stdout, "\r\033[K");
     }
   }
+  if (seconds_left == 0 && (settings.opts & OPT_FAIL_NO_USER_INTERACTION)) {
+    exitcode = 1;
+  }
   if (! (settings.opts & OPT_SILENT)) {
-    fprintf(stdout, "\r\033[KExited with status %i after %i seconds.\n",
-            settings.exitcode, seconds-seconds_left);
+    if (settings.opts & OPT_SUPPRESS_EXIT_INFO) {
+      fprintf(stdout, "\r\033[K\n");
+    } else {
+      fprintf(stdout, "\r\033[KExit %i after %i seconds.\n", exitcode, seconds-seconds_left);
+    }
   }
 
-  return settings.exitcode;
+  
+  return exitcode;
 }
