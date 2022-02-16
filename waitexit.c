@@ -1,37 +1,103 @@
 /*
  * Wait for N seconds or any input before exiting.
  * Prints a countdown in terminal while waiting to exit.
- * Auhtor: Øyvind Stegard <oyvind@stegard.net>
+ * Author: Øyvind Stegard <oyvind@stegard.net>
  */
 
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <libgen.h>
 #include <errno.h>
 #include <string.h>
 #include <termios.h>
+#include <sys/ioctl.h>
 
-#define DBG(m) fprintf(stderr, "dbg: %s\n", m)
+/* Get terminal width using ioctl */
+static unsigned short term_width = 0;
+static unsigned short get_terminal_width() {
+  if (term_width == 0) {
+    struct winsize sz;
+    int result = ioctl(0, TIOCGWINSZ, &sz);
+    if (result > -1) {
+      term_width = sz.ws_col;
+    }
+  }
+  return term_width;
+}
+
+/* Word wraps and aligns a prefix pluss descriptive text.
+   For user friendly help text formatting in resizable terminal. */
+#define FORMATTING_MAX_WIDTH 80
+static void print_aligned(FILE* const out,
+                          const char* first_line_prefix,
+                          const char* text) {
+  const unsigned short tw = get_terminal_width();
+  const unsigned short formatting_width = tw > 0 && tw < FORMATTING_MAX_WIDTH ? tw : FORMATTING_MAX_WIDTH;
+
+  const size_t prefix_len = strlen(first_line_prefix);
+  fputs(first_line_prefix, out);
+
+  size_t remain = strlen(text);
+  char buf[1024 + remain];
+  char* writeptr = buf;
+  while (remain > 0) {
+    while (isspace(*text)) ++text;
+    int linemax = formatting_width - prefix_len;
+    if (remain > linemax) {
+      if (! isspace(text[linemax])) {
+        // prefer to break line on word boundary
+        while (linemax > 0 && ! isspace(text[linemax-1])) --linemax;
+        if (linemax == 0) {
+          // no word boundary found while back tracking, just break at end
+          linemax = formatting_width - prefix_len;
+        }
+      }
+      writeptr = stpncpy(writeptr, text, linemax);
+      remain -= linemax;
+      
+      text += linemax;
+      *(writeptr++) = '\n';
+      for (int i=0; i<prefix_len; i++) *(writeptr++) = ' ';
+    } else {
+      // last line
+      writeptr = stpncpy(writeptr, text, remain);
+      strcpy(writeptr, "\n");
+      break;
+    }
+  }
+  fputs(buf, out);
+}
 
 static void print_usage(const char* self) {
+  print_aligned(stderr, "", "Prints a countdown in terminal while waiting to exit.");
+  print_aligned(stderr, "", "When timer reaches zero or any input occurs, the program exits.");
+  print_aligned(stderr, "", "");
+
   char* bnbuf = strdup(self);
-  fprintf(stderr, "Prints a countdown in terminal while waiting to exit.\n");
-  fprintf(stderr, "When timer reaches zero or any input occurs, the program exits.\n");
-  fprintf(stderr, "\n");
-  fprintf(stderr, "Use: %s [opts] N, where N is number of seconds to wait.\n", basename(bnbuf));
-  fprintf(stderr, "\n");
-  fprintf(stderr, "Options:\n");
-  fprintf(stderr, "-s       be completely silent, do not output anything while waiting.\n");
-  fprintf(stderr, "-e CODE  exit with status CODE\n");
-  fprintf(stderr, "-h       show this help\n");
+  char use_prefix[strlen(bnbuf)+100];
+  sprintf(use_prefix, "Use: %s [opts] N, ", basename(bnbuf));
   free(bnbuf);
+  print_aligned(stderr, use_prefix, "where N is number of seconds to wait.");
+
+  print_aligned(stderr, "", "");
+  print_aligned(stderr, "Options:", "");
+  print_aligned(stderr, "-x      ", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+  print_aligned(stderr, "-s      ", "Be completely silent, do not output anything while waiting. While testing this solution, there are necessary words lorem opsum dolor. Sit amet while waiting. For never ending. Great. 1 2 3 4 5. End of text.");
+  
+  print_aligned(stderr, "-m MSG  ", "Use a custom countdown message, which is a format string with single integer argument that is number of seconds left.");
+  print_aligned(stderr, "-e CODE ", "Exit with status CODE.");
+  print_aligned(stderr, "-h      ", "show this help.");
 }
+
+static const char* DEFAULT_MSG = "Hei there %s seconds left";
 
 typedef struct {
   int countdown;
   unsigned int opts;
   unsigned char exitcode;
+  char* msg;
 } Settings;
 
 #define OPT_SILENT 0x1
