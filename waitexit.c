@@ -278,7 +278,7 @@ int main(int argc, char ** argv) {
   }
   if (! (settings.opts & OPT_SILENT)) {
     if (settings.opts & OPT_SUPPRESS_EXIT_INFO) {
-      fprintf(stdout, "\r\033[K\n");
+      fprintf(stdout, "\r\033[K\r");
     } else {
       fprintf(stdout, "\r\033[KExit %i after %i seconds.\n", exitcode, seconds-seconds_left);
     }
